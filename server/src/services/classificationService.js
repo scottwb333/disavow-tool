@@ -81,6 +81,47 @@ export async function getEffectiveDomainDecision(workspaceId, managedDomainId, s
   return { decision: null, rule: null, scope: null }
 }
 
+function rulesLatestByNormKey(rules) {
+  const m = new Map()
+  for (const r of rules) {
+    const k = normRootKey(r.value)
+    if (!k) continue
+    const prev = m.get(k)
+    if (!prev || new Date(r.updatedAt) > new Date(prev.updatedAt)) m.set(k, r)
+  }
+  return m
+}
+
+/**
+ * Fast O(1) lookup per root — same outcome as getEffectiveDomainDecision for source_domain rules.
+ * Use for bulk flows; avoid refreshEffectiveDecisionsForManagedDomain on whole domains.
+ */
+export async function createSourceDomainDecisionLookup(workspaceId, managedDomainId) {
+  const [mdRules, wsRules] = await Promise.all([
+    ClassificationRule.find({
+      workspaceId,
+      managedDomainId,
+      entityType: 'source_domain'
+    }).lean(),
+    ClassificationRule.find({
+      workspaceId,
+      managedDomainId: null,
+      entityType: 'source_domain'
+    }).lean()
+  ])
+  const mdByKey = rulesLatestByNormKey(mdRules)
+  const wsByKey = rulesLatestByNormKey(wsRules)
+  return function lookup(sourceRootDomain) {
+    const k = normRootKey(sourceRootDomain)
+    if (!k) return { decision: null, scope: null }
+    const md = mdByKey.get(k)
+    if (md) return { decision: md.decision, scope: 'managed_domain' }
+    const ws = wsByKey.get(k)
+    if (ws) return { decision: ws.decision, scope: 'workspace' }
+    return { decision: null, scope: null }
+  }
+}
+
 export async function isUrlWhitelistedForManagedDomain(workspaceId, managedDomainId, url) {
   const u = String(url).trim()
   const r = await ClassificationRule.findOne({

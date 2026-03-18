@@ -162,4 +162,19 @@ All `/api/workspaces/...` routes (except create/list if scoped) require workspac
 | Nofollow / Sponsored / Ugc / Text / Frame / Form / Image / Sitewide / New link / Lost link | booleans |
 | First seen / Last seen | dates |
 
-Root domain from `Source url` via `URL` + psl or simple hostname normalization (eTLD+1 heuristic via `tldts` or manual).
+Root domain from `Source url` (or Agency **Link**) via `URL` + eTLD+1 (`tldts`).
+
+### Upload formats
+
+- **CSV** (UTF-8), or **Excel** `.xlsx` / `.xls` — **first worksheet only**; row 1 = headers (same names as below).
+
+### Agency Analytics export
+
+| CSV header | Internal key |
+|------------|--------------|
+| Link | sourceUrl (referring page) |
+| Anchor Text | anchor |
+| Trust Flow | drives `pageAscore` when Page ascore absent: **TF &lt; 10** → compressed low scores (flagged as weak); **TF ≥ 10** → scaled so typical rows clear low-authority noise |
+| Citation Flow | stored in `rawRow` |
+
+If **Target url** is missing and anchor looks like a URL, it is used as target for deduplication.

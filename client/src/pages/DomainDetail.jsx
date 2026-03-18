@@ -30,6 +30,16 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger
+} from '@/components/ui/alert-dialog'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 import { Ban, CircleDot, RotateCcw } from 'lucide-react'
@@ -130,6 +140,11 @@ export function DomainDetail() {
   const [notesSaving, setNotesSaving] = useState(false)
   const notesInitForDomain = useRef(null)
   const [uploadDropActive, setUploadDropActive] = useState(false)
+  const [disavowByRiskOpen, setDisavowByRiskOpen] = useState(false)
+  const [disavowByRiskPreviewCount, setDisavowByRiskPreviewCount] = useState(null)
+  const [disavowByRiskPreviewLoading, setDisavowByRiskPreviewLoading] = useState(false)
+  const [disavowByRiskApplying, setDisavowByRiskApplying] = useState(false)
+  const [disavowByRiskScope, setDisavowByRiskScope] = useState('local')
 
   const loadDetail = useCallback(() => {
     api.get(`/workspaces/${workspaceId}/managed-domains/${domainId}`).then((r) => setDetail(r.data))
@@ -215,17 +230,51 @@ export function DomainDetail() {
   }, [mainTab, loadDisavowPreview])
 
   useEffect(() => {
+    if (!disavowByRiskOpen) {
+      setDisavowByRiskPreviewCount(null)
+      setDisavowByRiskScope('local')
+      return
+    }
+    let cancelled = false
+    setDisavowByRiskPreviewLoading(true)
+    api
+      .get(
+        `/workspaces/${workspaceId}/managed-domains/${domainId}/classifications/disavow-by-risk-preview`
+      )
+      .then((r) => {
+        if (!cancelled) setDisavowByRiskPreviewCount(r.data.count ?? 0)
+      })
+      .catch((ex) => {
+        if (!cancelled) {
+          toast.error(ex.response?.data?.error || ex.message || 'Could not load count')
+          setDisavowByRiskPreviewCount(0)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDisavowByRiskPreviewLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [disavowByRiskOpen, workspaceId, domainId])
+
+  useEffect(() => {
     api
       .get(`/workspaces/${workspaceId}/managed-domains/${domainId}/rows?limit=20`)
       .then((r) => setRowsPage({ rows: r.data.rows || [], total: r.data.total }))
   }, [workspaceId, domainId, uploads])
 
-  const isCsvFile = (f) => {
+  const isSpreadsheetFile = (f) => {
     if (!f || !f.name) return false
+    const n = f.name.toLowerCase()
+    const t = (f.type || '').toLowerCase()
     return (
-      f.name.toLowerCase().endsWith('.csv') ||
-      f.type === 'text/csv' ||
-      f.type === 'application/vnd.ms-excel'
+      n.endsWith('.csv') ||
+      n.endsWith('.xlsx') ||
+      n.endsWith('.xls') ||
+      t === 'text/csv' ||
+      t.includes('spreadsheetml') ||
+      t === 'application/vnd.ms-excel'
     )
   }
 
@@ -250,8 +299,8 @@ export function DomainDetail() {
     setUploadDropActive(false)
     const f = e.dataTransfer.files?.[0]
     if (!f) return
-    if (!isCsvFile(f)) {
-      toast.error('Please drop a .csv file')
+    if (!isSpreadsheetFile(f)) {
+      toast.error('Please drop a .csv or Excel file (.xlsx / .xls)')
       return
     }
     setFile(f)
@@ -366,6 +415,34 @@ export function DomainDetail() {
       loadSources()
     } catch (ex) {
       toast.error(ex.response?.data?.error || ex.message)
+    }
+  }
+
+  const applyDisavowByRisk = async () => {
+    setDisavowByRiskApplying(true)
+    try {
+      const { data } = await api.post(
+        `/workspaces/${workspaceId}/managed-domains/${domainId}/classifications/disavow-by-risk`,
+        { scope: disavowByRiskScope }
+      )
+      const n = data.count ?? 0
+      const global = data.scope === 'global' || disavowByRiskScope === 'global'
+      if (n === 0) {
+        toast.message('No medium/high-risk domains left to disavow on this site')
+      } else if (global) {
+        toast.success(
+          `Workspace disavow list updated — ${n} domain${n === 1 ? '' : 's'} (all sites, medium & high risk)`
+        )
+      } else {
+        toast.success(`Local disavow added for ${n} domain${n === 1 ? '' : 's'} (medium & high risk)`)
+      }
+      setDisavowByRiskOpen(false)
+      loadSources()
+      if (mainTab === 'disavow') loadDisavowPreview()
+    } catch (ex) {
+      toast.error(ex.response?.data?.error || ex.message)
+    } finally {
+      setDisavowByRiskApplying(false)
     }
   }
 
@@ -597,16 +674,19 @@ export function DomainDetail() {
               onDrop={onUploadDrop}
             >
               <CardHeader>
-                <CardTitle className="text-base">SEMrush CSV</CardTitle>
+                <CardTitle className="text-base">Backlink CSV</CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  Drag and drop a CSV onto this card, or choose a file. Then use{' '}
+                  Upload <span className="font-medium text-foreground">.csv</span> or Excel{' '}
+                  <span className="font-medium text-foreground">.xlsx</span> /{' '}
+                  <span className="font-medium text-foreground">.xls</span> (first sheet). SEMrush, Agency
+                  Analytics (Link, Anchor Text, Trust Flow, …), etc. Drag and drop or choose a file, then{' '}
                   <span className="font-medium text-foreground">Upload &amp; import</span>.
                 </p>
               </CardHeader>
               <CardContent className="flex flex-wrap items-end gap-4">
                 <Input
                   type="file"
-                  accept=".csv"
+                  accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                   onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                 />
                 {file ? (
@@ -679,6 +759,87 @@ export function DomainDetail() {
             <Button variant="outline" size="sm" onClick={() => setManualOpen(true)}>
               Add domain rule
             </Button>
+            <AlertDialog
+              open={disavowByRiskOpen}
+              onOpenChange={(open) => {
+                setDisavowByRiskOpen(open)
+                if (open) setDisavowByRiskScope('local')
+              }}
+            >
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" size="sm" className="shrink-0">
+                  Disavow medium &amp; high risk
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Disavow medium &amp; high risk?</AlertDialogTitle>
+                  <AlertDialogDescription asChild>
+                    <div className="space-y-3 text-left">
+                      <p>
+                        Disavow every source domain on this site rated{' '}
+                        <strong className="text-foreground">medium</strong> or{' '}
+                        <strong className="text-foreground">high</strong>. Already disavowed (local or
+                        workspace), approved for the disavow file, or whitelisted are skipped.
+                      </p>
+                      <div className="space-y-2">
+                        <span className="text-sm font-medium text-foreground">Apply as</span>
+                        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border p-3 has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                          <input
+                            type="radio"
+                            name="disavow-by-risk-scope"
+                            className="mt-1"
+                            checked={disavowByRiskScope === 'local'}
+                            onChange={() => setDisavowByRiskScope('local')}
+                          />
+                          <span className="text-sm text-muted-foreground">
+                            <span className="font-medium text-foreground">This site only</span> — local
+                            disavow for this property only
+                          </span>
+                        </label>
+                        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border p-3 has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                          <input
+                            type="radio"
+                            name="disavow-by-risk-scope"
+                            className="mt-1"
+                            checked={disavowByRiskScope === 'global'}
+                            onChange={() => setDisavowByRiskScope('global')}
+                          />
+                          <span className="text-sm text-muted-foreground">
+                            <span className="font-medium text-foreground">Workspace (global)</span> — add
+                            to the workspace disavow list (applies to every site in this workspace)
+                          </span>
+                        </label>
+                      </div>
+                      {disavowByRiskPreviewLoading ? (
+                        <p className="text-foreground">Counting eligible domains…</p>
+                      ) : disavowByRiskPreviewCount !== null ? (
+                        <p className="font-medium text-foreground">
+                          {disavowByRiskPreviewCount === 0
+                            ? 'No eligible domains right now.'
+                            : `${disavowByRiskPreviewCount} domain${disavowByRiskPreviewCount === 1 ? '' : 's'} will be updated.`}
+                        </p>
+                      ) : null}
+                    </div>
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={disavowByRiskApplying}>Cancel</AlertDialogCancel>
+                  <Button
+                    variant="destructive"
+                    disabled={
+                      disavowByRiskApplying ||
+                      disavowByRiskPreviewLoading ||
+                      disavowByRiskPreviewCount === null ||
+                      disavowByRiskPreviewCount === 0
+                    }
+                    onClick={applyDisavowByRisk}
+                  >
+                    {disavowByRiskApplying ? 'Working…' : 'Confirm disavow'}
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
             {Object.keys(selected).some((k) => selected[k]) && (
               <div className="ml-auto flex gap-2">
                 <Button variant="secondary" size="sm" onClick={() => bulkClassify('blacklist')}>

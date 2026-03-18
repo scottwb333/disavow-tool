@@ -1,45 +1,14 @@
 import fs from 'fs'
+import fsPromises from 'fs/promises'
+import path from 'path'
 import csv from 'csv-parser'
 import { BacklinkRow } from '../models/BacklinkRow.js'
 import { BacklinkUpload } from '../models/BacklinkUpload.js'
-import { mapRowKeys, normalizeRow, makeDedupeKey } from '../utils/csvSemrush.js'
+import { excelBufferToRowRecords, isExcelExtension } from '../utils/excelRows.js'
+import { rowObjectToDoc } from './csvImportService.js'
 import { recomputeAnalysesForManagedDomain } from './aggregateSourceDomains.js'
 
 const BATCH = 800
-
-function rowToDoc(row, opts) {
-  const mapped = mapRowKeys(row)
-  if (!mapped.sourceUrl) return null
-  const norm = normalizeRow(mapped)
-  if (!norm.sourceRootDomain) return null
-  return {
-    uploadId: opts.uploadId,
-    managedDomainId: opts.managedDomainId,
-    workspaceId: opts.workspaceId,
-    sourceRootDomain: norm.sourceRootDomain,
-    pageAscore: norm.pageAscore,
-    sourceTitle: norm.sourceTitle,
-    sourceUrl: norm.sourceUrl,
-    targetUrl: norm.targetUrl,
-    anchor: norm.anchor,
-    externalLinks: norm.externalLinks,
-    internalLinks: norm.internalLinks,
-    nofollow: norm.nofollow,
-    sponsored: norm.sponsored,
-    ugc: norm.ugc,
-    text: norm.text,
-    frame: norm.frame,
-    form: norm.form,
-    image: norm.image,
-    sitewide: norm.sitewide,
-    firstSeen: norm.firstSeen,
-    lastSeen: norm.lastSeen,
-    newLink: norm.newLink,
-    lostLink: norm.lostLink,
-    rawRow: row,
-    dedupeKey: makeDedupeKey(norm.sourceUrl, norm.targetUrl, norm.anchor)
-  }
-}
 
 async function insertChunk(chunk) {
   let inserted = 0
@@ -58,7 +27,55 @@ async function insertChunk(chunk) {
   return { inserted, dups }
 }
 
-export async function processCsvFileStream(filePath, opts) {
+async function finalizeUpload(uploadId, managedDomainId, workspaceId, userId, rowCount, duplicateCount) {
+  const rec = await recomputeAnalysesForManagedDomain(managedDomainId, workspaceId, userId)
+  await BacklinkUpload.findByIdAndUpdate(uploadId, {
+    rowCount,
+    duplicateCount,
+    status: 'complete',
+    workspaceBlacklistApplied: rec.workspaceBlacklistApplied ?? 0
+  })
+  return {
+    rowCount,
+    duplicateCount,
+    workspaceBlacklistApplied: rec.workspaceBlacklistApplied ?? 0
+  }
+}
+
+async function runBatchedImportFromRecords(records, opts) {
+  const { uploadId, managedDomainId, workspaceId, userId } = opts
+  let batch = []
+  let rowCount = 0
+  let duplicateCount = 0
+
+  const flushOneBatch = async () => {
+    if (batch.length < BATCH) return
+    const chunk = batch.splice(0, BATCH)
+    const { inserted, dups } = await insertChunk(chunk)
+    rowCount += inserted
+    duplicateCount += dups
+  }
+
+  const flushRest = async () => {
+    while (batch.length) {
+      const chunk = batch.splice(0, Math.min(BATCH, batch.length))
+      const { inserted, dups } = await insertChunk(chunk)
+      rowCount += inserted
+      duplicateCount += dups
+    }
+  }
+
+  for (const row of records) {
+    const doc = rowObjectToDoc(row, opts)
+    if (doc) batch.push(doc)
+    if (batch.length >= BATCH) await flushOneBatch()
+  }
+  await flushRest()
+
+  return finalizeUpload(uploadId, managedDomainId, workspaceId, userId, rowCount, duplicateCount)
+}
+
+export async function processCsvFileStreamOnly(filePath, opts) {
   const { uploadId, managedDomainId, workspaceId } = opts
   let batch = []
   let rowCount = 0
@@ -90,7 +107,7 @@ export async function processCsvFileStream(filePath, opts) {
     parser.on('data', (row) => {
       chain = chain
         .then(async () => {
-          const doc = rowToDoc(row, { uploadId, managedDomainId, workspaceId })
+          const doc = rowObjectToDoc(row, opts)
           if (doc) batch.push(doc)
           if (batch.length >= BATCH) await flushOneBatch()
         })
@@ -109,20 +126,25 @@ export async function processCsvFileStream(filePath, opts) {
     parser.on('error', reject)
   })
 
-  const rec = await recomputeAnalysesForManagedDomain(
+  return finalizeUpload(
+    uploadId,
     managedDomainId,
     workspaceId,
-    opts.userId
+    opts.userId,
+    rowCount,
+    duplicateCount
   )
-  await BacklinkUpload.findByIdAndUpdate(uploadId, {
-    rowCount,
-    duplicateCount,
-    status: 'complete',
-    workspaceBlacklistApplied: rec.workspaceBlacklistApplied ?? 0
-  })
-  return {
-    rowCount,
-    duplicateCount,
-    workspaceBlacklistApplied: rec.workspaceBlacklistApplied ?? 0
-  }
 }
+
+/** CSV (streamed) or Excel .xlsx / .xls (buffered first sheet). */
+export async function processImportFile(filePath, opts) {
+  const ext = path.extname(filePath).toLowerCase()
+  if (isExcelExtension(ext)) {
+    const buf = await fsPromises.readFile(filePath)
+    const records = excelBufferToRowRecords(buf)
+    return runBatchedImportFromRecords(records, opts)
+  }
+  return processCsvFileStreamOnly(filePath, opts)
+}
+
+export const processCsvFileStream = processImportFile

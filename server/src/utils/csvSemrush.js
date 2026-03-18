@@ -5,6 +5,11 @@ const HEADER_ALIASES = {
   'page ascore': 'pageAscore',
   'source title': 'sourceTitle',
   'source url': 'sourceUrl',
+  // Agency Analytics (and similar) exports
+  link: 'sourceUrl',
+  'anchor text': 'anchor',
+  'trust flow': 'trustFlow',
+  'citation flow': 'citationFlow',
   'target url': 'targetUrl',
   anchor: 'anchor',
   'external links': 'externalLinks',
@@ -25,7 +30,7 @@ const HEADER_ALIASES = {
 
 export function normalizeHeaderKey(key) {
   if (key == null) return ''
-  return String(key).trim().toLowerCase()
+  return String(key).trim().replace(/^\ufeff/, '').toLowerCase()
 }
 
 export function mapRowKeys(row) {
@@ -87,14 +92,41 @@ export function makeDedupeKey(sourceUrl, targetUrl, anchor) {
   return crypto.createHash('sha256').update(s).digest('hex')
 }
 
+function targetUrlFromAnchor(anchor) {
+  const a = String(anchor || '').trim()
+  if (/^https?:\/\//i.test(a)) return a
+  return ''
+}
+
 export function normalizeRow(mapped) {
   const sourceUrl = String(mapped.sourceUrl || '').trim()
+  let pageAscore = parseFloatSafe(mapped.pageAscore)
+  const tf = mapped.trustFlow
+  if (
+    (pageAscore === null || pageAscore === undefined) &&
+    tf != null &&
+    String(tf).trim() !== ''
+  ) {
+    const n = parseFloatSafe(tf)
+    if (n !== null) {
+      if (n < 10) {
+        // Majestic TF under 10 = weak source — map into low “pageAscore” band for risk heuristics
+        pageAscore = Math.round(Math.min(4.99, Math.max(0, n * 0.5)) * 100) / 100
+      } else {
+        // TF 10+ treated as acceptable+; bump slightly so avg clears generic low-ascore threshold
+        pageAscore = Math.min(100, n + 5)
+      }
+    }
+  }
+  let targetUrl = String(mapped.targetUrl || '').trim()
+  const anchor = String(mapped.anchor || '')
+  if (!targetUrl) targetUrl = targetUrlFromAnchor(anchor)
   return {
-    pageAscore: parseFloatSafe(mapped.pageAscore),
+    pageAscore,
     sourceTitle: String(mapped.sourceTitle || ''),
     sourceUrl,
-    targetUrl: String(mapped.targetUrl || '').trim(),
-    anchor: String(mapped.anchor || ''),
+    targetUrl,
+    anchor,
     externalLinks: parseIntSafe(mapped.externalLinks),
     internalLinks: parseIntSafe(mapped.internalLinks),
     nofollow: parseBool(mapped.nofollow),

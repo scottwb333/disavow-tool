@@ -2,6 +2,7 @@ import { Router } from 'express'
 import mongoose from 'mongoose'
 import os from 'os'
 import fs from 'fs/promises'
+import path from 'path'
 import { randomUUID, randomBytes } from 'crypto'
 import { Workspace } from '../models/Workspace.js'
 import { WorkspaceMember } from '../models/WorkspaceMember.js'
@@ -10,8 +11,8 @@ import { requireAuth } from '../middleware/requireAuth.js'
 import { requireWorkspaceMember } from '../middleware/requireWorkspace.js'
 import multer from 'multer'
 import { BacklinkUpload } from '../models/BacklinkUpload.js'
-import { processCsvBuffer } from '../services/csvImportService.js'
-import { processCsvFileStream } from '../services/csvImportStream.js'
+import { processCsvBuffer, processExcelBuffer } from '../services/csvImportService.js'
+import { processImportFile } from '../services/csvImportStream.js'
 import { BacklinkRow } from '../models/BacklinkRow.js'
 import { SourceDomainAnalysis } from '../models/SourceDomainAnalysis.js'
 import {
@@ -21,7 +22,8 @@ import {
   setAnalysisApproval,
   getEffectiveDomainDecision,
   revertDisavowForSource,
-  invalidateClassificationRuleCaches
+  invalidateClassificationRuleCaches,
+  createSourceDomainDecisionLookup
 } from '../services/classificationService.js'
 import { buildDisavowContent } from '../services/disavowService.js'
 import { GeneratedDisavow } from '../models/GeneratedDisavow.js'
@@ -43,7 +45,11 @@ const upload = multer({
 const diskUpload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, os.tmpdir()),
-    filename: (_req, _file, cb) => cb(null, `disavow-${randomUUID()}.csv`)
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || '').toLowerCase()
+      const safe = /^\.(csv|xlsx|xls)$/i.test(ext) ? ext : '.csv'
+      cb(null, `disavow-${randomUUID()}${safe}`)
+    }
   }),
   limits: { fileSize: 100 * 1024 * 1024 }
 })
@@ -436,7 +442,7 @@ router.post(
       if (!d) return res.status(404).json({ error: 'Managed domain not found' })
       const filePath = req.file?.path
       if (!filePath) {
-        return res.status(400).json({ error: 'CSV file required (field: file)' })
+        return res.status(400).json({ error: 'CSV or Excel file required (field: file)' })
       }
       const bu = await BacklinkUpload.create({
         managedDomainId: d._id,
@@ -453,9 +459,9 @@ router.post(
       }
       ;(async () => {
         try {
-          await processCsvFileStream(filePath, opts)
+          await processImportFile(filePath, opts)
         } catch (err) {
-          console.error('CSV stream import error', err)
+          console.error('Spreadsheet import error', err)
           await BacklinkUpload.findByIdAndUpdate(bu._id, {
             status: 'failed',
             errorMessage: String(err.message || err)
@@ -483,8 +489,9 @@ router.post(
       const d = await loadDomainInWorkspace(req.workspaceId, req.params.domainId)
       if (!d) return res.status(404).json({ error: 'Managed domain not found' })
       if (!req.file?.buffer) {
-        return res.status(400).json({ error: 'CSV file required' })
+        return res.status(400).json({ error: 'CSV or Excel file required' })
       }
+      const orig = (req.file.originalname || '').toLowerCase()
       const bu = await BacklinkUpload.create({
         managedDomainId: d._id,
         workspaceId: req.workspaceId,
@@ -492,12 +499,16 @@ router.post(
         uploadedBy: req.user._id,
         status: 'processing'
       })
-      const result = await processCsvBuffer(req.file.buffer, {
+      const opts = {
         uploadId: bu._id,
         managedDomainId: d._id,
         workspaceId: req.workspaceId,
         userId: req.user._id
-      })
+      }
+      const result =
+        orig.endsWith('.xlsx') || orig.endsWith('.xls')
+          ? await processExcelBuffer(req.file.buffer, opts)
+          : await processCsvBuffer(req.file.buffer, opts)
       const updated = await BacklinkUpload.findById(bu._id).lean()
       res.status(201).json({ upload: updated, ...result })
     } catch (e) {
@@ -784,6 +795,106 @@ router.post(
         rootsNorm
       )
       res.json({ ok: true, count: roots.length })
+    } catch (e) {
+      next(e)
+    }
+  }
+)
+
+const DISAVOW_BY_RISK_CHUNK = 400
+const DISAVOW_BY_RISK_PARALLEL = 35
+
+async function listRootsEligibleForDisavowByRisk(workspaceId, managedDomainId) {
+  const lookup = await createSourceDomainDecisionLookup(workspaceId, managedDomainId)
+  const analyses = await SourceDomainAnalysis.find({
+    managedDomainId,
+    'recommendation.level': { $in: ['medium', 'high'] }
+  })
+    .select('sourceRootDomain userApprovedForDisavow')
+    .lean()
+  const roots = []
+  for (const a of analyses) {
+    if (a.userApprovedForDisavow) continue
+    const eff = lookup(a.sourceRootDomain)
+    if (eff.decision === 'blacklist' || eff.decision === 'whitelist') continue
+    roots.push(String(a.sourceRootDomain).toLowerCase())
+  }
+  return [...new Set(roots)]
+}
+
+router.get(
+  '/workspaces/:workspaceId/managed-domains/:domainId/classifications/disavow-by-risk-preview',
+  requireWorkspaceMember(),
+  async (req, res, next) => {
+    try {
+      const d = await loadDomainInWorkspace(req.workspaceId, req.params.domainId)
+      if (!d) return res.status(404).json({ error: 'Managed domain not found' })
+      const roots = await listRootsEligibleForDisavowByRisk(req.workspaceId, d._id)
+      res.json({ count: roots.length })
+    } catch (e) {
+      next(e)
+    }
+  }
+)
+
+router.post(
+  '/workspaces/:workspaceId/managed-domains/:domainId/classifications/disavow-by-risk',
+  requireWorkspaceMember(),
+  async (req, res, next) => {
+    try {
+      const d = await loadDomainInWorkspace(req.workspaceId, req.params.domainId)
+      if (!d) return res.status(404).json({ error: 'Managed domain not found' })
+      const scope = req.body?.scope === 'global' ? 'global' : 'local'
+      const roots = await listRootsEligibleForDisavowByRisk(req.workspaceId, d._id)
+      if (!roots.length) {
+        return res.json({ ok: true, count: 0, scope, message: 'No medium/high-risk domains to disavow' })
+      }
+      const ruleMdId = scope === 'global' ? null : d._id
+      const notes =
+        scope === 'global' ? 'Bulk: medium/high risk (workspace)' : 'Bulk: medium/high risk'
+      for (let i = 0; i < roots.length; i += DISAVOW_BY_RISK_CHUNK) {
+        const chunk = roots.slice(i, i + DISAVOW_BY_RISK_CHUNK)
+        for (let j = 0; j < chunk.length; j += DISAVOW_BY_RISK_PARALLEL) {
+          const slice = chunk.slice(j, j + DISAVOW_BY_RISK_PARALLEL)
+          await Promise.all(
+            slice.map((v) =>
+              upsertRule(
+                {
+                  workspaceId: req.workspaceId,
+                  managedDomainId: ruleMdId,
+                  entityType: 'source_domain',
+                  value: v,
+                  decision: 'blacklist',
+                  notes,
+                  userId: req.user._id,
+                  manual: true
+                },
+                { skipCacheInvalidate: true }
+              )
+            )
+          )
+        }
+      }
+      invalidateClassificationRuleCaches(req.workspaceId)
+      if (scope === 'local') {
+        for (let i = 0; i < roots.length; i += DISAVOW_BY_RISK_CHUNK) {
+          const chunk = roots.slice(i, i + DISAVOW_BY_RISK_CHUNK)
+          await refreshEffectiveDecisionsForManagedDomainSources(req.workspaceId, d._id, chunk)
+        }
+      } else {
+        const mds = await ManagedDomain.find({ workspaceId: req.workspaceId }).select('_id').lean()
+        for (const md of mds) {
+          for (let i = 0; i < roots.length; i += DISAVOW_BY_RISK_CHUNK) {
+            const chunk = roots.slice(i, i + DISAVOW_BY_RISK_CHUNK)
+            await refreshEffectiveDecisionsForManagedDomainSources(
+              req.workspaceId,
+              md._id,
+              chunk
+            )
+          }
+        }
+      }
+      res.json({ ok: true, count: roots.length, scope })
     } catch (e) {
       next(e)
     }
