@@ -2,6 +2,7 @@ import { ClassificationRule } from '../models/ClassificationRule.js'
 import { SourceDomainAnalysis } from '../models/SourceDomainAnalysis.js'
 import { ManagedDomain } from '../models/ManagedDomain.js'
 import { Workspace } from '../models/Workspace.js'
+import { BacklinkRow } from '../models/BacklinkRow.js'
 import {
   getEffectiveDomainDecision,
   isUrlWhitelistedForManagedDomain
@@ -10,6 +11,10 @@ import {
 function disavowLineForDomain(domain) {
   const d = String(domain).toLowerCase().replace(/^www\./, '')
   return `domain:${d}`
+}
+
+function normRootKey(v) {
+  return String(v || '').toLowerCase().replace(/^www\./, '')
 }
 
 export async function buildDisavowContent({ workspaceId, managedDomainId }) {
@@ -75,18 +80,29 @@ export async function buildDisavowContent({ workspaceId, managedDomainId }) {
     }
   }
 
+  const [rootsInUploads, urlsInUploads] = await Promise.all([
+    BacklinkRow.distinct('sourceRootDomain', { managedDomainId }),
+    BacklinkRow.distinct('sourceUrl', { managedDomainId })
+  ])
+  const rootKeySet = new Set(rootsInUploads.map(normRootKey))
+  const urlInCsv = new Set(urlsInUploads.map((u) => String(u || '').trim()))
+
+  const domains = [...domainSet.keys()].filter((d) => rootKeySet.has(normRootKey(d))).sort()
+  const urls = [...urlSet].filter((u) => urlInCsv.has(String(u).trim())).sort()
+
   const lines = []
   const now = new Date().toISOString().slice(0, 10)
   lines.push(`# Generated for ${md.domainName}`)
   lines.push(`# Workspace: ${ws.name}`)
   lines.push(`# Created on ${now}`)
+  lines.push(
+    '# Only domains/URLs that appear in this site\'s uploaded backlink CSV are listed.'
+  )
   lines.push('')
 
-  const domains = [...domainSet.keys()].sort()
   for (const d of domains) {
     lines.push(disavowLineForDomain(d))
   }
-  const urls = [...urlSet].sort()
   for (const u of urls) {
     lines.push(u)
   }

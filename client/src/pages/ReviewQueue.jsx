@@ -64,8 +64,27 @@ export function ReviewQueue() {
     setPanel(null)
   }
 
-  const markDisavowRow = async (root) => {
-    setRowBusy(`d:${root}`)
+  const markGlobalDisavow = async (root) => {
+    setRowBusy(`g:${root}`)
+    try {
+      await api.post(`/workspaces/${workspaceId}/classifications`, {
+        entityType: 'source_domain',
+        value: root,
+        decision: 'blacklist',
+        notes: '',
+        manual: true
+      })
+      toast.success('Added to workspace disavow list')
+      load()
+    } catch (ex) {
+      toast.error(ex.response?.data?.error || ex.message)
+    } finally {
+      setRowBusy(null)
+    }
+  }
+
+  const markLocalDisavow = async (root) => {
+    setRowBusy(`l:${root}`)
     try {
       await api.post(`/workspaces/${workspaceId}/classifications`, {
         managedDomainId: domainId,
@@ -74,7 +93,7 @@ export function ReviewQueue() {
         decision: 'blacklist',
         manual: true
       })
-      toast.success('Marked disavow')
+      toast.success('Disavow on this site only')
       load()
     } catch (ex) {
       toast.error(ex.response?.data?.error || ex.message)
@@ -196,18 +215,30 @@ export function ReviewQueue() {
                         Undo
                       </Button>
                     ) : (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 border-destructive/40 text-destructive hover:bg-destructive/10"
-                        disabled={
-                          rowBusy === `d:${s.sourceRootDomain}` || rowBusy === `r:${s.sourceRootDomain}`
-                        }
-                        onClick={() => markDisavowRow(s.sourceRootDomain)}
-                      >
-                        {rowBusy === `d:${s.sourceRootDomain}` ? '…' : 'Disavow'}
-                      </Button>
+                      <div className="flex max-w-[148px] flex-col gap-1">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-2 text-xs"
+                          title="Workspace list"
+                          disabled={rowBusy === `g:${s.sourceRootDomain}` || rowBusy === `r:${s.sourceRootDomain}`}
+                          onClick={() => markGlobalDisavow(s.sourceRootDomain)}
+                        >
+                          {rowBusy === `g:${s.sourceRootDomain}` ? '…' : 'Global disavow'}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 border-destructive/40 px-2 text-xs text-destructive hover:bg-destructive/10"
+                          title="This site only"
+                          disabled={rowBusy === `l:${s.sourceRootDomain}` || rowBusy === `r:${s.sourceRootDomain}`}
+                          onClick={() => markLocalDisavow(s.sourceRootDomain)}
+                        >
+                          {rowBusy === `l:${s.sourceRootDomain}` ? '…' : 'Local disavow'}
+                        </Button>
+                      </div>
                     )}
                   </TableCell>
                   <TableCell className="text-right">
@@ -263,8 +294,11 @@ export function ReviewQueue() {
                 Flags: {(panel.analysis?.recommendation?.flags || []).join(', ') || '—'}
               </p>
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" onClick={() => classify(panel.analysis.sourceRootDomain, 'blacklist')}>
-                  Blacklist
+                <Button size="sm" variant="outline" onClick={() => markGlobalDisavow(panel.analysis.sourceRootDomain)}>
+                  Global disavow
+                </Button>
+                <Button size="sm" variant="destructive" onClick={() => markLocalDisavow(panel.analysis.sourceRootDomain)}>
+                  Local disavow
                 </Button>
                 <Button size="sm" variant="secondary" onClick={() => classify(panel.analysis.sourceRootDomain, 'whitelist')}>
                   Whitelist

@@ -82,9 +82,9 @@
 
 ### Disavow resolution order (per managed domain)
 
-1. Collect **blacklist** entries: workspace domain rules + MD-specific blacklists + manually added (no CSV) + **user-approved** analysis flags (optional).
-2. Subtract: **whitelist** at MD level for that domain/URL (overrides workspace blacklist).
-3. Subtract: workspace whitelist does not remove MD-only blacklist unless product says otherwise — **assumption**: MD blacklist always disavows; workspace whitelist prevents disavow unless MD explicitly blacklists (tunable).
+1. Collect **blacklist** entries: workspace domain/URL rules + MD-specific blacklists + **user-approved** analysis flags.
+2. **CSV scope**: keep only domains and source URLs that appear in `backlink_rows` for this managed domain (workspace blacklists alone do not add lines for referrers that never appeared in this property’s upload).
+3. Subtract: **whitelist** at MD level for that domain/URL (overrides workspace blacklist) — applied while resolving effective decisions before collection.
 4. **Documented default**:  
    - Effective decision = max-specific rule wins: **managedDomainId-specific rule** > **workspace rule** for same entity.  
    - For same scope, later `updatedAt` wins or explicit priority field later.

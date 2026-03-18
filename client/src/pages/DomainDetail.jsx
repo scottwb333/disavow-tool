@@ -39,7 +39,7 @@ function isRowInDisavow(s) {
   return s.effectiveDecision === 'blacklist' || !!s.userApprovedForDisavow
 }
 
-function SourceStatusCell({ effectiveDecision, userApprovedForDisavow }) {
+function SourceStatusCell({ effectiveDecision, userApprovedForDisavow, disavowKind }) {
   const d = effectiveDecision || null
   if (d === 'whitelist') {
     return (
@@ -49,11 +49,24 @@ function SourceStatusCell({ effectiveDecision, userApprovedForDisavow }) {
     )
   }
   if (d === 'blacklist' || userApprovedForDisavow) {
+    const sub =
+      disavowKind === 'global'
+        ? 'Workspace'
+        : disavowKind === 'local'
+          ? 'This site'
+          : disavowKind === 'approved'
+            ? 'Approved'
+            : null
     return (
-      <Badge variant="destructive" className="gap-1 font-medium">
-        <Ban className="h-3 w-3" aria-hidden />
-        Disavow
-      </Badge>
+      <div className="flex flex-col gap-0.5">
+        <Badge variant="destructive" className="w-fit gap-1 font-medium">
+          <Ban className="h-3 w-3" aria-hidden />
+          Disavow
+        </Badge>
+        {sub ? (
+          <span className="text-[10px] leading-tight text-muted-foreground">{sub}</span>
+        ) : null}
+      </div>
     )
   }
   if (d === 'needs_review') {
@@ -303,8 +316,32 @@ export function DomainDetail() {
     }
   }
 
-  const markRowDisavow = async (root) => {
-    const key = `d:${root}`
+  const markGlobalDisavow = async (root) => {
+    const key = `g:${root}`
+    setSourceRowBusy(key)
+    try {
+      await api.post(`/workspaces/${workspaceId}/classifications`, {
+        entityType: 'source_domain',
+        value: root,
+        decision: 'blacklist',
+        notes: '',
+        manual: true
+      })
+      toast.success('Added to workspace disavow list (all sites)')
+      loadSources()
+      if (panel?.analysis?.sourceRootDomain === root) {
+        setPanel((p) => (p ? { ...p, effectiveDecision: 'blacklist' } : p))
+      }
+      if (mainTab === 'disavow') loadDisavowPreview()
+    } catch (ex) {
+      toast.error(ex.response?.data?.error || ex.message)
+    } finally {
+      setSourceRowBusy(null)
+    }
+  }
+
+  const markLocalDisavow = async (root) => {
+    const key = `l:${root}`
     setSourceRowBusy(key)
     try {
       await api.post(`/workspaces/${workspaceId}/classifications`, {
@@ -315,7 +352,7 @@ export function DomainDetail() {
         notes: '',
         manual: true
       })
-      toast.success('Marked disavow')
+      toast.success('Disavow on this site only')
       loadSources()
       if (panel?.analysis?.sourceRootDomain === root) {
         setPanel((p) => (p ? { ...p, effectiveDecision: 'blacklist' } : p))
@@ -566,7 +603,7 @@ export function DomainDetail() {
                     <TableHead>Avg ascore</TableHead>
                     <TableHead>Risk</TableHead>
                     <TableHead className="min-w-[140px]">Disavow / status</TableHead>
-                    <TableHead className="w-[200px]">Actions</TableHead>
+                    <TableHead className="min-w-[200px]">Actions</TableHead>
                     <TableHead />
                   </TableRow>
                 </TableHeader>
@@ -614,6 +651,7 @@ export function DomainDetail() {
                         <SourceStatusCell
                           effectiveDecision={s.effectiveDecision}
                           userApprovedForDisavow={!!s.userApprovedForDisavow}
+                          disavowKind={s.disavowKind}
                         />
                       </TableCell>
                       <TableCell>
@@ -633,16 +671,30 @@ export function DomainDetail() {
                             Undo
                           </Button>
                         ) : (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-8 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                            disabled={sourceRowBusy === `d:${s.sourceRootDomain}`}
-                            onClick={() => markRowDisavow(s.sourceRootDomain)}
-                          >
-                            {sourceRowBusy === `d:${s.sourceRootDomain}` ? '…' : 'Disavow'}
-                          </Button>
+                          <div className="flex max-w-[148px] flex-col gap-1">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 px-2 text-xs"
+                              title="Workspace list — disavows on every managed domain"
+                              disabled={sourceRowBusy === `g:${s.sourceRootDomain}`}
+                              onClick={() => markGlobalDisavow(s.sourceRootDomain)}
+                            >
+                              {sourceRowBusy === `g:${s.sourceRootDomain}` ? '…' : 'Global disavow'}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 border-destructive/40 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                              title="This property only"
+                              disabled={sourceRowBusy === `l:${s.sourceRootDomain}`}
+                              onClick={() => markLocalDisavow(s.sourceRootDomain)}
+                            >
+                              {sourceRowBusy === `l:${s.sourceRootDomain}` ? '…' : 'Local disavow'}
+                            </Button>
+                          </div>
                         )}
                       </TableCell>
                       <TableCell>
@@ -712,9 +764,11 @@ export function DomainDetail() {
 
         <TabsContent value="disavow" className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Includes every source marked <strong className="text-foreground">Disavow</strong> on the Sources tab
-            (blacklist or <strong className="text-foreground">Add to disavow file</strong> in Details), plus
-            workspace-wide disavow rules.
+            Lists sources you marked <strong className="text-foreground">Global disavow</strong>,{' '}
+            <strong className="text-foreground">Local disavow</strong>, or{' '}
+            <strong className="text-foreground">Add to disavow file</strong> —{' '}
+            <strong className="text-foreground">only if that domain or URL appears in this property&apos;s uploaded
+            CSV</strong>. Workspace-wide rules alone do not add domains that are not linking to this site.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button onClick={exportDisavow}>Download disavow file</Button>
@@ -745,7 +799,8 @@ export function DomainDetail() {
             value={
               disavowPreviewLoading
                 ? 'Loading preview…'
-                : disavowPreview || '# No lines yet — add blacklist rules or workspace disavow entries'
+                : disavowPreview ||
+                  '# No lines yet — disavow sources on the Sources tab (must appear in uploaded CSV)'
             }
           />
         </TabsContent>
@@ -782,10 +837,17 @@ export function DomainDetail() {
                 </Button>
                 <Button
                   size="sm"
-                  variant="destructive"
-                  onClick={() => classify(panel.analysis.sourceRootDomain, 'blacklist')}
+                  variant="outline"
+                  onClick={() => markGlobalDisavow(panel.analysis.sourceRootDomain)}
                 >
-                  Blacklist
+                  Global disavow
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => markLocalDisavow(panel.analysis.sourceRootDomain)}
+                >
+                  Local disavow
                 </Button>
                 <Button
                   size="sm"
@@ -812,8 +874,8 @@ export function DomainDetail() {
                 <div className="space-y-0.5">
                   <span className="font-medium text-foreground">Add to disavow file</span>
                   <p className="text-xs text-muted-foreground">
-                    Same as clicking Disavow on the row: included in disavow.txt and shown as Disavow in the list.
-                    Use this when you agree with the recommendation but haven’t blacklisted yet.
+                    Adds this domain to disavow.txt for this site when it appears in your CSV. Use when you agree
+                    with the recommendation but have not used Global or Local disavow yet.
                   </p>
                 </div>
               </div>

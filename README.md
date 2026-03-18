@@ -74,7 +74,8 @@ All protected routes require `Authorization: Bearer <Firebase ID token>`.
 
 - **Workspace rules** (`managedDomainId: null`): shared blacklist/whitelist across all managed domains.
 - **Managed-domain rules**: override workspace (e.g. whitelist on one site excludes that domain from disavow even if workspace-blacklisted).
-- **Disavow file**: only **blacklist** decisions + optional **user-approved** analysis flags — never auto-disavow from heuristics alone.
+- **Global vs local disavow** (source list): **Global** adds a workspace blacklist; **Local** blacklists only that managed domain. Either shows as disavow on the row.
+- **Disavow file** (per property): **blacklist** + **user-approved** flags, then **restricted to domains/URLs present in that property’s uploaded CSV** — extra workspace blacklist entries that never linked to this site are omitted.
 
 ## Recent additions
 
@@ -97,6 +98,18 @@ All protected routes require `Authorization: Bearer <Firebase ID token>`.
 | 3 Analysis + rules + disavow | ✅ |
 | 4 Frontend | ✅ core flows |
 | 5 Polish | Ongoing — true streaming CSV, tests |
+
+## Deploy on DigitalOcean App Platform
+
+If the build fails with **`when there is no default process a command is required`**, the platform is treating the **repo root** as the app. This repo has no root `package.json` — the API lives in **`server/`**.
+
+**Fix (UI):** create or edit the **Web Service** → set **Source directory** to `server` → **Build command** `npm install` → **Run command** `npm start`. App Platform sets `PORT`; the server already uses `process.env.PORT` (falls back to `4000` locally).
+
+Set env vars: `MONGODB_URI`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `CLIENT_ORIGIN` (your real frontend URL for CORS). Health check path: `/api/health`.
+
+Example spec: [`.do/app.example.yaml`](./.do/app.example.yaml) (replace `YOUR_GITHUB_USER/YOUR_REPO` and env values).
+
+**Frontend:** the client calls `/api` (same-origin in dev). For production on a separate static host you’ll need a public API URL in the client (env + `api.js`) or a single-domain setup.
 
 ## Tradeoffs
 

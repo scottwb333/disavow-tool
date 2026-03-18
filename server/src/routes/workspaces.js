@@ -605,10 +605,26 @@ router.get(
           .limit(limit)
           .lean()
       ])
-      const sourceDomains = list.map((a) => ({
-        ...a,
-        effectiveDecision: a.effectiveDecision ?? null
-      }))
+      const sourceDomains = await Promise.all(
+        list.map(async (a) => {
+          const needsKind =
+            a.effectiveDecision === 'blacklist' || a.userApprovedForDisavow
+          let disavowKind = null
+          if (needsKind) {
+            const eff = await getEffectiveDomainDecision(req.workspaceId, d._id, a.sourceRootDomain)
+            if (eff.decision === 'blacklist') {
+              disavowKind = eff.scope === 'workspace' ? 'global' : 'local'
+            } else if (a.userApprovedForDisavow && eff.decision !== 'whitelist') {
+              disavowKind = 'approved'
+            }
+          }
+          return {
+            ...a,
+            effectiveDecision: a.effectiveDecision ?? null,
+            disavowKind
+          }
+        })
+      )
       res.json({ sourceDomains, total, page, limit })
     } catch (e) {
       next(e)
