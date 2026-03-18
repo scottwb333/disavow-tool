@@ -36,6 +36,7 @@ import {
 import { User } from '../models/User.js'
 import { requireWorkspaceAdmin } from '../middleware/requireWorkspaceAdmin.js'
 import { WorkspaceInvite } from '../models/WorkspaceInvite.js'
+import { deleteWorkspaceAndData } from '../services/deleteWorkspace.js'
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -116,6 +117,29 @@ router.patch(
       ).lean()
       if (!ws) return res.status(404).json({ error: 'Workspace not found' })
       res.json(ws)
+    } catch (e) {
+      next(e)
+    }
+  }
+)
+
+router.delete(
+  '/workspaces/:workspaceId',
+  requireWorkspaceMember(),
+  requireWorkspaceAdmin,
+  async (req, res, next) => {
+    try {
+      const confirmName = String(req.body?.confirmName ?? '').trim()
+      const ws = await Workspace.findById(req.workspaceId).lean()
+      if (!ws) return res.status(404).json({ error: 'Workspace not found' })
+      const expected = String(ws.name || '').trim().toLowerCase()
+      if (!confirmName || confirmName.toLowerCase() !== expected) {
+        return res.status(400).json({
+          error: 'Type the workspace name exactly to confirm deletion'
+        })
+      }
+      await deleteWorkspaceAndData(req.workspaceId)
+      res.json({ ok: true })
     } catch (e) {
       next(e)
     }

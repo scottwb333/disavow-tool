@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useNavigate } from 'react-router-dom'
 import api from '@/lib/api'
 import { toast } from 'sonner'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -13,10 +13,21 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from '@/components/ui/alert-dialog'
+import { Separator } from '@/components/ui/separator'
 import { Globe, Upload, Shield, Settings } from 'lucide-react'
 
 export function WorkspaceDashboard() {
   const { workspaceId } = useParams()
+  const navigate = useNavigate()
   const [ws, setWs] = useState(null)
   const [domains, setDomains] = useState([])
   const [sharedRulesCount, setSharedRulesCount] = useState(0)
@@ -24,6 +35,9 @@ export function WorkspaceDashboard() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [editName, setEditName] = useState('')
   const [saving, setSaving] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteConfirmName, setDeleteConfirmName] = useState('')
+  const [deleteBusy, setDeleteBusy] = useState(false)
 
   const load = useCallback(async () => {
     const [a, b, rulesRes, me] = await Promise.all([
@@ -70,6 +84,32 @@ export function WorkspaceDashboard() {
       setSaving(false)
     }
   }
+
+  const openDeleteWorkspace = () => {
+    setSettingsOpen(false)
+    setDeleteConfirmName('')
+    setDeleteDialogOpen(true)
+  }
+
+  const deleteWorkspace = async () => {
+    setDeleteBusy(true)
+    try {
+      await api.delete(`/workspaces/${workspaceId}`, {
+        data: { confirmName: deleteConfirmName.trim() }
+      })
+      toast.success('Workspace deleted')
+      window.dispatchEvent(new CustomEvent('workspace-updated', { detail: { workspaceId, deleted: true } }))
+      navigate('/', { replace: true })
+    } catch (ex) {
+      toast.error(ex.response?.data?.error || ex.message)
+    } finally {
+      setDeleteBusy(false)
+    }
+  }
+
+  const nameMatches =
+    ws &&
+    deleteConfirmName.trim().toLowerCase() === String(ws.name || '').trim().toLowerCase()
 
   if (!ws) return <p className="text-muted-foreground">Loading…</p>
 
@@ -127,8 +167,57 @@ export function WorkspaceDashboard() {
               </Button>
             </DialogFooter>
           </form>
+          <Separator className="my-4" />
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-destructive">Delete workspace</h3>
+            <p className="text-sm text-muted-foreground">
+              Permanently remove this workspace, all managed domains, uploads, rules, and team access.
+              Only owners and admins can delete. Members cannot.
+            </p>
+            <Button type="button" variant="outline" className="border-destructive/50 text-destructive hover:bg-destructive/10" onClick={openDeleteWorkspace}>
+              Delete workspace…
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this workspace?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-left text-muted-foreground">
+                <p>
+                  This cannot be undone. All backlinks, classifications, disavow history, and invites for{' '}
+                  <span className="font-medium text-foreground">{ws.name}</span> will be removed.
+                </p>
+                <div className="space-y-1.5">
+                  <label htmlFor="delete-ws-confirm" className="text-sm font-medium text-foreground">
+                    Type the workspace name to confirm
+                  </label>
+                  <Input
+                    id="delete-ws-confirm"
+                    value={deleteConfirmName}
+                    onChange={(e) => setDeleteConfirmName(e.target.value)}
+                    placeholder={ws.name}
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteBusy}>Cancel</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              disabled={!nameMatches || deleteBusy}
+              onClick={deleteWorkspace}
+            >
+              {deleteBusy ? 'Deleting…' : 'Delete workspace permanently'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="grid gap-4 sm:grid-cols-2">
         <Card className="border-border">
           <CardHeader className="pb-2">
