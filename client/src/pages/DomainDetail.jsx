@@ -126,6 +126,10 @@ export function DomainDetail() {
   const [uploadBusy, setUploadBusy] = useState(false)
   const uploadPollRef = useRef(null)
   const [sourceRowBusy, setSourceRowBusy] = useState(null)
+  const [primaryNotes, setPrimaryNotes] = useState('')
+  const [notesSaving, setNotesSaving] = useState(false)
+  const notesInitForDomain = useRef(null)
+  const [uploadDropActive, setUploadDropActive] = useState(false)
 
   const loadDetail = useCallback(() => {
     api.get(`/workspaces/${workspaceId}/managed-domains/${domainId}`).then((r) => setDetail(r.data))
@@ -180,6 +184,18 @@ export function DomainDetail() {
   }, [search, decision, sort])
 
   useEffect(() => {
+    notesInitForDomain.current = null
+  }, [domainId])
+
+  useEffect(() => {
+    if (!detail || String(detail._id) !== String(domainId)) return
+    if (notesInitForDomain.current !== domainId) {
+      notesInitForDomain.current = domainId
+      setPrimaryNotes(detail.notes ?? '')
+    }
+  }, [domainId, detail])
+
+  useEffect(() => {
     loadDetail()
     loadUploads()
   }, [loadDetail, loadUploads])
@@ -203,6 +219,43 @@ export function DomainDetail() {
       .get(`/workspaces/${workspaceId}/managed-domains/${domainId}/rows?limit=20`)
       .then((r) => setRowsPage({ rows: r.data.rows || [], total: r.data.total }))
   }, [workspaceId, domainId, uploads])
+
+  const isCsvFile = (f) => {
+    if (!f || !f.name) return false
+    return (
+      f.name.toLowerCase().endsWith('.csv') ||
+      f.type === 'text/csv' ||
+      f.type === 'application/vnd.ms-excel'
+    )
+  }
+
+  const onUploadDragEnter = (e) => {
+    e.preventDefault()
+    if ([...e.dataTransfer.types].includes('Files')) setUploadDropActive(true)
+  }
+
+  const onUploadDragLeave = (e) => {
+    e.preventDefault()
+    const next = e.relatedTarget
+    if (!next || !e.currentTarget.contains(next)) setUploadDropActive(false)
+  }
+
+  const onUploadDragOver = (e) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  const onUploadDrop = (e) => {
+    e.preventDefault()
+    setUploadDropActive(false)
+    const f = e.dataTransfer.files?.[0]
+    if (!f) return
+    if (!isCsvFile(f)) {
+      toast.error('Please drop a .csv file')
+      return
+    }
+    setFile(f)
+  }
 
   const uploadCsv = async () => {
     if (!file || uploadBusy) return
@@ -444,6 +497,22 @@ export function DomainDetail() {
     if (mainTab === 'disavow') loadDisavowPreview()
   }
 
+  const savePrimaryNotes = async () => {
+    setNotesSaving(true)
+    try {
+      const { data } = await api.patch(
+        `/workspaces/${workspaceId}/managed-domains/${domainId}`,
+        { notes: primaryNotes }
+      )
+      setDetail((prev) => (prev ? { ...prev, notes: data.notes ?? '' } : prev))
+      toast.success('Notes saved')
+    } catch (ex) {
+      toast.error(ex.response?.data?.error || ex.message || 'Could not save notes')
+    } finally {
+      setNotesSaving(false)
+    }
+  }
+
   const addManualDomain = async (e) => {
     e.preventDefault()
     await api.post(`/workspaces/${workspaceId}/classifications`, {
@@ -510,23 +579,52 @@ export function DomainDetail() {
           <TabsTrigger value="upload">CSV upload</TabsTrigger>
           <TabsTrigger value="rows">Backlink rows</TabsTrigger>
           <TabsTrigger value="disavow">Disavow</TabsTrigger>
+          <TabsTrigger value="notes">Notes</TabsTrigger>
         </TabsList>
 
         <TabsContent value="upload" className="space-y-4">
-          <Card className="border-border">
-            <CardHeader>
-              <CardTitle className="text-base">SEMrush CSV</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-wrap items-end gap-4">
-              <Input type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0])} />
-              <Button onClick={uploadCsv} disabled={!file || uploadBusy}>
-                {uploadBusy ? 'Working…' : 'Upload & import'}
-              </Button>
-              <p className="w-full text-xs text-muted-foreground">
-                Small files import immediately. Larger CSVs upload in the background with streaming import
-                (low server memory).
-              </p>
-            </CardContent>
+          <Card
+            className={cn(
+              'border-border transition-colors',
+              uploadDropActive &&
+                'border-primary border-2 border-dashed bg-primary/5 shadow-sm ring-2 ring-primary/15'
+            )}
+          >
+            <div
+              onDragEnter={onUploadDragEnter}
+              onDragLeave={onUploadDragLeave}
+              onDragOver={onUploadDragOver}
+              onDrop={onUploadDrop}
+            >
+              <CardHeader>
+                <CardTitle className="text-base">SEMrush CSV</CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  Drag and drop a CSV onto this card, or choose a file. Then use{' '}
+                  <span className="font-medium text-foreground">Upload &amp; import</span>.
+                </p>
+              </CardHeader>
+              <CardContent className="flex flex-wrap items-end gap-4">
+                <Input
+                  type="file"
+                  accept=".csv"
+                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                />
+                {file ? (
+                  <Button onClick={uploadCsv} disabled={uploadBusy}>
+                    {uploadBusy ? 'Working…' : 'Upload & import'}
+                  </Button>
+                ) : null}
+                {file ? (
+                  <span className="w-full text-sm text-muted-foreground">
+                    Selected: <span className="font-medium text-foreground">{file.name}</span>
+                  </span>
+                ) : null}
+                <p className="w-full text-xs text-muted-foreground">
+                  Small files import immediately. Larger CSVs upload in the background with streaming import
+                  (low server memory).
+                </p>
+              </CardContent>
+            </div>
           </Card>
           <Card className="border-border">
             <CardHeader>
@@ -803,6 +901,32 @@ export function DomainDetail() {
                   '# No lines yet — disavow sources on the Sources tab (must appear in uploaded CSV)'
             }
           />
+        </TabsContent>
+
+        <TabsContent value="notes" className="space-y-4">
+          <Card className="border-border">
+            <CardHeader>
+              <CardTitle className="text-base">Primary domain notes</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Internal notes for{' '}
+                <span className="font-medium text-foreground">
+                  {detail.displayName || detail.domainName}
+                </span>
+                . Visible to everyone in this workspace; not included in disavow exports.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Textarea
+                className="min-h-[240px] text-sm"
+                placeholder="Strategy, history, client context, last review date…"
+                value={primaryNotes}
+                onChange={(e) => setPrimaryNotes(e.target.value)}
+              />
+              <Button type="button" onClick={savePrimaryNotes} disabled={notesSaving}>
+                {notesSaving ? 'Saving…' : 'Save notes'}
+              </Button>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 

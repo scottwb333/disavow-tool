@@ -9,6 +9,7 @@ import { WorkspaceDashboard } from '@/pages/WorkspaceDashboard'
 import { DomainsList } from '@/pages/DomainsList'
 import { DomainDetail } from '@/pages/DomainDetail'
 import { WorkspaceRules } from '@/pages/WorkspaceRules'
+import { WorkspaceTeam } from '@/pages/WorkspaceTeam'
 import { ReviewQueue } from '@/pages/ReviewQueue'
 import { AcceptInvite } from '@/pages/AcceptInvite'
 import { RootGate } from '@/pages/RootGate'
@@ -56,6 +57,7 @@ export default function App() {
             <Route path="domains/:domainId" element={<DomainDetail />} />
             <Route path="domains/:domainId/review" element={<ReviewQueue />} />
             <Route path="rules" element={<WorkspaceRules />} />
+            <Route path="team" element={<WorkspaceTeam />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

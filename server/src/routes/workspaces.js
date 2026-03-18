@@ -20,7 +20,8 @@ import {
   deleteRule,
   setAnalysisApproval,
   getEffectiveDomainDecision,
-  revertDisavowForSource
+  revertDisavowForSource,
+  invalidateClassificationRuleCaches
 } from '../services/classificationService.js'
 import { buildDisavowContent } from '../services/disavowService.js'
 import { GeneratedDisavow } from '../models/GeneratedDisavow.js'
@@ -91,6 +92,29 @@ router.get('/workspaces/:workspaceId', requireWorkspaceMember(), async (req, res
     next(e)
   }
 })
+
+router.patch(
+  '/workspaces/:workspaceId',
+  requireWorkspaceMember(),
+  requireWorkspaceAdmin,
+  async (req, res, next) => {
+    try {
+      const { name } = req.body
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ error: 'Workspace name required' })
+      }
+      const ws = await Workspace.findByIdAndUpdate(
+        req.workspaceId,
+        { name: String(name).trim() },
+        { new: true }
+      ).lean()
+      if (!ws) return res.status(404).json({ error: 'Workspace not found' })
+      res.json(ws)
+    } catch (e) {
+      next(e)
+    }
+  }
+)
 
 router.get(
   '/workspaces/:workspaceId/me',
@@ -561,11 +585,10 @@ router.get(
     try {
       const d = await loadDomainInWorkspace(req.workspaceId, req.params.domainId)
       if (!d) return res.status(404).json({ error: 'Not found' })
-      const legacy = await SourceDomainAnalysis.countDocuments({
-        managedDomainId: d._id,
-        effectiveDecision: { $exists: false }
-      })
-      if (legacy > 0) {
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1)
+      const decisionQ = req.query.decision
+      const hasSearch = Boolean(String(req.query.search || '').trim())
+      if (page === 1 || decisionQ === 'blacklist' || hasSearch) {
         await refreshEffectiveDecisionsForManagedDomain(d._id, req.workspaceId)
       }
       const filter = { managedDomainId: d._id }
@@ -575,7 +598,6 @@ router.get(
           'i'
         )
       }
-      const decisionQ = req.query.decision
       if (decisionQ === 'unclassified') {
         filter.$and = [
           { $or: [{ effectiveDecision: null }, { effectiveDecision: '' }] },
@@ -595,7 +617,6 @@ router.get(
       let sort = { rowCount: -1 }
       if (req.query.sort === 'ascore') sort = { avgPageAscore: 1 }
       if (req.query.sort === 'recommendation') sort = { 'recommendation.score': -1 }
-      const page = Math.max(1, parseInt(req.query.page, 10) || 1)
       const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50))
       const [total, list] = await Promise.all([
         SourceDomainAnalysis.countDocuments(filter),
@@ -742,17 +763,21 @@ router.post(
       for (const root of roots) {
         const v = String(root).toLowerCase()
         rootsNorm.push(v)
-        await upsertRule({
-          workspaceId: req.workspaceId,
-          managedDomainId: d._id,
-          entityType: 'source_domain',
-          value: v,
-          decision,
-          notes: '',
-          userId: req.user._id,
-          manual: true
-        })
+        await upsertRule(
+          {
+            workspaceId: req.workspaceId,
+            managedDomainId: d._id,
+            entityType: 'source_domain',
+            value: v,
+            decision,
+            notes: '',
+            userId: req.user._id,
+            manual: true
+          },
+          { skipCacheInvalidate: true }
+        )
       }
+      invalidateClassificationRuleCaches(req.workspaceId)
       await refreshEffectiveDecisionsForManagedDomainSources(
         req.workspaceId,
         d._id,

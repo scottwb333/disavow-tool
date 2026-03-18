@@ -57,19 +57,19 @@ export function Landing() {
         <section className="mx-auto max-w-6xl px-6 pb-20 pt-16 md:pb-28 md:pt-24">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow-sm">
             <Sparkles className="h-3.5 w-3.5 text-teal-600" />
-            Built for SEO teams who outgrew spreadsheets
+            Stop toxic links from dragging you down
           </div>
           <h1 className="max-w-4xl text-4xl font-semibold leading-[1.08] tracking-tight text-slate-900 md:text-5xl lg:text-6xl">
-            From SEMrush export to a{' '}
+            Toxic backlinks are holding your site back.{' '}
             <span className="bg-gradient-to-r from-teal-600 via-emerald-600 to-teal-600 bg-clip-text text-transparent">
-              Google-ready disavow file
+              This is how you fix it.
             </span>
-            — with judgment, not guesswork.
           </h1>
           <p className="mt-6 max-w-2xl text-lg leading-relaxed text-slate-600 md:text-xl">
-            Upload backlink CSVs, let the system cluster and score sources, then decide what belongs in
-            your disavow. Shared workspace rules remember what you trust — so every site you manage
-            gets smarter.
+            Low-quality and manipulative links can cap your rankings and invite risk. Upload your
+            backlink data, review what actually deserves action, and ship a clean{' '}
+            <span className="font-medium text-slate-800">disavow.txt</span> to Google — with full
+            control and a paper trail your team can stand behind.
           </p>
           <div className="mt-10 flex flex-wrap gap-4">
             <Button
@@ -83,7 +83,7 @@ export function Landing() {
               </Link>
             </Button>
             <p className="flex w-full items-center text-sm text-slate-500 sm:w-auto sm:pl-2">
-              No credit card. Firebase sign-in.
+              No credit card.
             </p>
           </div>
         </section>
@@ -98,17 +98,17 @@ export function Landing() {
                 {
                   step: '01',
                   title: 'Ingest',
-                  body: 'Drop your SEMrush backlink export. We normalize domains, dates, and link signals at scale.'
+                  body: 'Bring your backlink export (CSV). We normalize domains, dates, and link signals so you can see the full picture.'
                 },
                 {
                   step: '02',
-                  title: 'Understand',
-                  body: 'Automatic grouping and risk signals surface what deserves a look — you stay in control.'
+                  title: 'Decide',
+                  body: 'Grouping and risk signals highlight what to scrutinize — you choose what to disavow, whitelist, or ignore.'
                 },
                 {
                   step: '03',
                   title: 'Export',
-                  body: 'Whitelist, blacklist, and workspace rules compile into a valid disavow.txt you can ship to Search Console.'
+                  body: 'Turn decisions into a valid disavow.txt for Search Console. Workspace rules carry forward so the next site is faster.'
                 }
               ].map((item) => (
                 <div
@@ -132,12 +132,12 @@ export function Landing() {
                 <span className="text-sm font-semibold uppercase tracking-wide">Intelligence layer</span>
               </div>
               <h2 className="text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">
-                Recommendations, not robots
+                You disavow with intent — not by accident
               </h2>
               <p className="mt-4 text-slate-600 leading-relaxed">
-                Heuristic scoring flags sitewide patterns, thin authority, syndication footprints, and
-                repetitive anchors — tuned so you can review a queue instead of drowning in rows. Nothing
-                hits your disavow file until you say so.
+                Scoring surfaces sketchy patterns, thin authority, and repetitive anchors so you focus on
+                links that might actually hurt you. Nothing goes into your disavow until you approve it —
+                so you protect rankings without nuking good links.
               </p>
               <ul className="mt-8 space-y-4">
                 {[
@@ -185,10 +185,10 @@ https://spam.example/bad-page`}
         <section className="border-t border-slate-200/80 bg-slate-900 py-20 text-white">
           <div className="mx-auto max-w-3xl px-6 text-center">
             <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">
-              Ready to clean up your link graph?
+              Take control of your backlink profile
             </h2>
             <p className="mt-4 text-slate-400">
-              Sign in, create a workspace, upload a CSV — first disavow draft in minutes.
+              Sign in, add a site, upload your links — build a disavow you can submit with confidence.
             </p>
             <Button
               size="lg"
@@ -204,11 +204,16 @@ https://spam.example/bad-page`}
         </section>
 
         <footer className="border-t border-slate-200 bg-white py-8">
-          <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-6 text-sm text-slate-500 sm:flex-row">
-            <span>Disavow Tool — backlink review for serious SEO</span>
-            <Link to="/login" className="font-medium text-teal-700 hover:text-teal-800">
-              Sign in →
-            </Link>
+          <div className="mx-auto flex max-w-6xl flex-col items-center gap-6 px-6 text-sm text-slate-500">
+            <div className="flex w-full flex-col items-center justify-between gap-4 sm:flex-row">
+              <span>Disavow Tool — cut the bad links, keep the good ones</span>
+              <Link to="/login" className="font-medium text-teal-700 hover:text-teal-800">
+                Sign in →
+              </Link>
+            </div>
+            <p className="text-center text-xs text-slate-400">
+              © {new Date().getFullYear()} Highline Digital Marketing
+            </p>
           </div>
         </footer>
       </main>

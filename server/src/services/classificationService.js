@@ -1,34 +1,81 @@
+import { BacklinkRow } from '../models/BacklinkRow.js'
 import { ClassificationRule } from '../models/ClassificationRule.js'
 import { SourceDomainAnalysis } from '../models/SourceDomainAnalysis.js'
 
-const normRootKey = (v) => String(v || '').toLowerCase().replace(/^www\./, '')
+/** Strip www; compare so workspace rule "evil.com" matches CSV root "www.evil.com". */
+export const normRootKeyForSource = (v) =>
+  String(v || '')
+    .toLowerCase()
+    .replace(/^www\./, '')
 
-export async function getEffectiveDomainDecision(workspaceId, managedDomainId, sourceRootDomain) {
-  const domain = String(sourceRootDomain).toLowerCase()
-  const mdRules = await ClassificationRule.find({
+const normRootKey = normRootKeyForSource
+
+const RULE_CACHE_TTL_MS = 60_000
+const wsRulesCache = new Map()
+const mdRulesCache = new Map()
+
+export function invalidateClassificationRuleCaches(workspaceId) {
+  const id = String(workspaceId)
+  wsRulesCache.delete(id)
+  for (const k of mdRulesCache.keys()) {
+    if (String(k).startsWith(`${id}:`)) mdRulesCache.delete(k)
+  }
+}
+
+async function getMdSourceDomainRulesCached(workspaceId, managedDomainId) {
+  const k = `${workspaceId}:${managedDomainId}`
+  const now = Date.now()
+  const hit = mdRulesCache.get(k)
+  if (hit && now - hit.t < RULE_CACHE_TTL_MS) return hit.rules
+  const rules = await ClassificationRule.find({
     workspaceId,
     managedDomainId,
-    entityType: 'source_domain',
-    value: domain
-  })
-    .sort({ updatedAt: -1 })
-    .lean()
+    entityType: 'source_domain'
+  }).lean()
+  mdRulesCache.set(k, { rules, t: now })
+  return rules
+}
 
-  if (mdRules.length) {
-    return { decision: mdRules[0].decision, rule: mdRules[0], scope: 'managed_domain' }
-  }
-
-  const wsRules = await ClassificationRule.find({
+async function getWsSourceDomainRulesCached(workspaceId) {
+  const id = String(workspaceId)
+  const now = Date.now()
+  const hit = wsRulesCache.get(id)
+  if (hit && now - hit.t < RULE_CACHE_TTL_MS) return hit.rules
+  const rules = await ClassificationRule.find({
     workspaceId,
     managedDomainId: null,
-    entityType: 'source_domain',
-    value: domain
-  })
-    .sort({ updatedAt: -1 })
-    .lean()
+    entityType: 'source_domain'
+  }).lean()
+  wsRulesCache.set(id, { rules, t: now })
+  return rules
+}
 
-  if (wsRules.length) {
-    return { decision: wsRules[0].decision, rule: wsRules[0], scope: 'workspace' }
+/** Warm caches before batch refresh (avoids thundering herd). */
+export async function primeClassificationRuleCaches(workspaceId, managedDomainId) {
+  await Promise.all([
+    getWsSourceDomainRulesCached(workspaceId),
+    getMdSourceDomainRulesCached(workspaceId, managedDomainId)
+  ])
+}
+
+export async function getEffectiveDomainDecision(workspaceId, managedDomainId, sourceRootDomain) {
+  const key = normRootKey(sourceRootDomain)
+  if (!key) return { decision: null, rule: null, scope: null }
+
+  const mdRules = await getMdSourceDomainRulesCached(workspaceId, managedDomainId)
+  const mdMatch = mdRules
+    .filter((r) => normRootKey(r.value) === key)
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0]
+  if (mdMatch) {
+    return { decision: mdMatch.decision, rule: mdMatch, scope: 'managed_domain' }
+  }
+
+  const wsRules = await getWsSourceDomainRulesCached(workspaceId)
+  const wsMatch = wsRules
+    .filter((r) => normRootKey(r.value) === key)
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0]
+  if (wsMatch) {
+    return { decision: wsMatch.decision, rule: wsMatch, scope: 'workspace' }
   }
 
   return { decision: null, rule: null, scope: null }
@@ -53,16 +100,19 @@ export async function listRulesForWorkspace(workspaceId, { managedDomainId } = {
   return ClassificationRule.find(q).sort({ updatedAt: -1 }).lean()
 }
 
-export async function upsertRule({
-  workspaceId,
-  managedDomainId,
-  entityType,
-  value,
-  decision,
-  notes,
-  userId,
-  manual
-}) {
+export async function upsertRule(
+  {
+    workspaceId,
+    managedDomainId,
+    entityType,
+    value,
+    decision,
+    notes,
+    userId,
+    manual
+  },
+  { skipCacheInvalidate = false } = {}
+) {
   const v =
     entityType === 'source_domain'
       ? String(value).toLowerCase().trim()
@@ -91,11 +141,14 @@ export async function upsertRule({
     },
     { upsert: true, new: true, runValidators: true }
   )
+  if (!skipCacheInvalidate) invalidateClassificationRuleCaches(workspaceId)
   return doc
 }
 
 export async function deleteRule(ruleId, workspaceId) {
-  return ClassificationRule.findOneAndDelete({ _id: ruleId, workspaceId })
+  const r = await ClassificationRule.findOneAndDelete({ _id: ruleId, workspaceId })
+  if (r) invalidateClassificationRuleCaches(workspaceId)
+  return r
 }
 
 export async function setAnalysisApproval(managedDomainId, sourceRootDomain, approved) {
@@ -142,18 +195,22 @@ export async function applyWorkspaceBlacklistToManagedDomainSources({
     }).lean()
     if (existing?.decision === 'whitelist') continue
 
-    await upsertRule({
-      workspaceId,
-      managedDomainId,
-      entityType: 'source_domain',
-      value: domain,
-      decision: 'blacklist',
-      notes: 'Matched workspace disavow list on import',
-      userId,
-      manual: false
-    })
+    await upsertRule(
+      {
+        workspaceId,
+        managedDomainId,
+        entityType: 'source_domain',
+        value: domain,
+        decision: 'blacklist',
+        notes: 'Matched workspace disavow list on import',
+        userId,
+        manual: false
+      },
+      { skipCacheInvalidate: true }
+    )
     applied++
   }
+  if (applied) invalidateClassificationRuleCaches(workspaceId)
   return applied
 }
 

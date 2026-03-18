@@ -1,6 +1,6 @@
-import { Outlet, Link, useParams } from 'react-router-dom'
+import { Outlet, Link, useParams, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Globe, Shield, LogOut, Menu, Moon, Sun } from 'lucide-react'
+import { LayoutDashboard, Globe, Shield, Users, LogOut, Menu, Moon, Sun } from 'lucide-react'
 import { useTheme } from '@/context/ThemeContext'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -18,25 +18,45 @@ import { cn } from '@/lib/utils'
 
 export function AppLayout() {
   const { workspaceId } = useParams()
+  const location = useLocation()
   const { profile, logout } = useAuth()
   const { theme, toggleTheme } = useTheme()
   const [workspaces, setWorkspaces] = useState([])
   const [domains, setDomains] = useState([])
+  const [sharedRulesCount, setSharedRulesCount] = useState(0)
+
+  const refreshWorkspaces = () => {
+    api.get('/workspaces').then((r) => setWorkspaces(r.data.workspaces || [])).catch(() => {})
+  }
 
   useEffect(() => {
-    api.get('/workspaces').then((r) => setWorkspaces(r.data.workspaces || [])).catch(() => {})
+    refreshWorkspaces()
   }, [workspaceId])
+
+  useEffect(() => {
+    const onWs = () => refreshWorkspaces()
+    window.addEventListener('workspace-updated', onWs)
+    return () => window.removeEventListener('workspace-updated', onWs)
+  }, [])
 
   useEffect(() => {
     if (!workspaceId) {
       setDomains([])
+      setSharedRulesCount(0)
       return
     }
     api
       .get(`/workspaces/${workspaceId}/managed-domains`)
       .then((r) => setDomains(r.data.domains || []))
       .catch(() => setDomains([]))
+    api
+      .get(`/workspaces/${workspaceId}/classifications?scope=workspace`)
+      .then((r) => setSharedRulesCount((r.data.rules || []).length))
+      .catch(() => setSharedRulesCount(0))
   }, [workspaceId])
+
+  const teamPath = workspaceId ? `/w/${workspaceId}/team` : ''
+  const isTeamActive = teamPath && location.pathname === teamPath
 
   const SidebarInner = ({ sheet }) => (
     <div className={cn('flex h-full flex-col gap-1 p-4', sheet && 'pt-14')}>
@@ -79,12 +99,32 @@ export function AppLayout() {
               All domains
             </Link>
           </Button>
-          <Button variant="ghost" size="sm" className="justify-start" asChild>
-            <Link to={`/w/${workspaceId}/rules`}>
-              <Shield className="mr-2 h-4 w-4" />
-              Shared rules
+          <Button variant="ghost" size="sm" className="h-auto w-full justify-start px-3 py-2 font-normal" asChild>
+            <Link
+              to={`/w/${workspaceId}/rules`}
+              className="flex w-full items-center gap-2"
+            >
+              <Shield className="h-4 w-4 shrink-0" />
+              <span className="min-w-0 flex-1 text-left">View rules</span>
+              <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
+                {sharedRulesCount}
+              </span>
             </Link>
           </Button>
+          <Separator className="my-3" />
+          <p className="mb-2 px-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Team
+          </p>
+          <Link
+            to={teamPath}
+            className={cn(
+              'flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors hover:bg-accent',
+              isTeamActive && 'bg-accent text-foreground'
+            )}
+          >
+            <Users className="h-4 w-4 shrink-0" />
+            Team
+          </Link>
         </>
       )}
     </div>

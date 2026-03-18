@@ -1,7 +1,11 @@
 import mongoose from 'mongoose'
 import { SourceDomainAnalysis } from '../models/SourceDomainAnalysis.js'
 import { ManagedDomain } from '../models/ManagedDomain.js'
-import { getEffectiveDomainDecision } from './classificationService.js'
+import {
+  getEffectiveDomainDecision,
+  normRootKeyForSource,
+  primeClassificationRuleCaches
+} from './classificationService.js'
 
 const PARALLEL_FULL_REFRESH = 48
 
@@ -46,14 +50,26 @@ export async function refreshEffectiveDecisionsForManagedDomainSources(
   if (bulk.length) await SourceDomainAnalysis.bulkWrite(bulk)
 }
 
-/** After a workspace-wide source_domain rule changes, refresh that root across all managed domains. */
+/** After a workspace-wide source_domain rule changes, refresh every analysis row whose root matches (www/apex). */
 export async function refreshEffectiveDecisionAcrossWorkspaceForSource(workspaceId, sourceRootDomain) {
-  const domain = String(sourceRootDomain || '').toLowerCase()
-  if (!domain) return
+  const key = normRootKeyForSource(sourceRootDomain)
+  if (!key) return
   const wsId = toObjectId(workspaceId)
   const mds = await ManagedDomain.find({ workspaceId: wsId }).select('_id').lean()
   for (const d of mds) {
-    await refreshEffectiveDecisionsForManagedDomainSources(wsId, d._id, [domain])
+    const analyses = await SourceDomainAnalysis.find({ managedDomainId: d._id })
+      .select('sourceRootDomain')
+      .lean()
+    const roots = [
+      ...new Set(
+        analyses
+          .filter((a) => normRootKeyForSource(a.sourceRootDomain) === key)
+          .map((a) => String(a.sourceRootDomain).toLowerCase())
+      )
+    ]
+    if (roots.length) {
+      await refreshEffectiveDecisionsForManagedDomainSources(wsId, d._id, roots)
+    }
   }
 }
 
@@ -64,6 +80,7 @@ export async function refreshEffectiveDecisionsForManagedDomain(managedDomainId,
     .select('_id sourceRootDomain')
     .lean()
   if (!analyses.length) return
+  await primeClassificationRuleCaches(wsId, mdId)
   for (let i = 0; i < analyses.length; i += PARALLEL_FULL_REFRESH) {
     const slice = analyses.slice(i, i + PARALLEL_FULL_REFRESH)
     const rows = await Promise.all(
